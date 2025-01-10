@@ -37,6 +37,11 @@ class BlockSpaceManager(ABC):
                 PlaceholderBlockSpaceManager)
             return PlaceholderBlockSpaceManager
 
+        if version == "layer":
+            from vllm.core.layer_block_space_maneger import (
+                LayerBlockSpaceManager)
+            return LayerBlockSpaceManager
+
         raise ValueError(f"Unknown version {version=}")
 
     @abstractmethod
