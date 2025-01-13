@@ -1,5 +1,9 @@
+import os
+
 from vllm import LLM, SamplingParams
 
+os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 # Sample prompts.
 prompts = [
     "Hello, my name is",
@@ -11,7 +15,13 @@ prompts = [
 sampling_params = SamplingParams(temperature=0.8, top_p=0.95)
 
 # Create an LLM.
-llm = LLM(model="facebook/opt-125m")
+llm = LLM(
+    model="/Tan/model/Llama-3.2-1B-Instruct",
+    gpu_memory_utilization=0.9,
+    max_model_len=2048,
+    enable_chunked_prefill=False,
+    enforce_eager=True,
+)
 # Generate texts from the prompts. The output is a list of RequestOutput objects
 # that contain the prompt, generated text, and other information.
 outputs = llm.generate(prompts, sampling_params)
