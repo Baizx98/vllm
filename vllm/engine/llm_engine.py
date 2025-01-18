@@ -313,7 +313,8 @@ class LLMEngine:
         )
         self.log_stats = log_stats
         self.use_cached_outputs = use_cached_outputs
-
+        self.step_id = 0
+        self.trace: Dict[int, List[int]] = {}
         if not self.model_config.skip_tokenizer_init:
             self.tokenizer = self._init_tokenizer()
             self.detokenizer = Detokenizer(self.tokenizer)
@@ -1438,7 +1439,15 @@ class LLMEngine:
             # will cause one virtual engine's microbatch to block the pipeline.
             last_sampled_token_ids = \
                 self._get_last_sampled_token_ids(virtual_engine)
+            logger.info("setp id is %d", self.step_id)
 
+            blocks = []
+            for seq_group_meta_data in seq_group_metadata_list:
+                block_tables = seq_group_meta_data.block_tables
+                for block_id_list in block_tables.values():
+                    blocks.extend(block_id_list)
+            self.trace[self.step_id] = blocks
+            self.step_id += 1
             execute_model_req = ExecuteModelRequest(
                 seq_group_metadata_list=seq_group_metadata_list,
                 blocks_to_swap_in=scheduler_outputs.blocks_to_swap_in,

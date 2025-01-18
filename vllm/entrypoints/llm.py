@@ -1,4 +1,5 @@
 import itertools
+import json
 import warnings
 from contextlib import contextmanager
 from typing import (Any, ClassVar, Dict, List, Optional, Sequence, Tuple, Type,
@@ -965,6 +966,9 @@ class LLM:
 
         if use_tqdm:
             pbar.close()
+
+        with open("trace.json", "w") as f:
+            json.dump(self.llm_engine.trace, f)
         # Sort the outputs by request ID.
         # This is necessary because some requests may be finished earlier than
         # its previous requests.

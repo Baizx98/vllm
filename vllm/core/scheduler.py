@@ -311,6 +311,7 @@ class Scheduler:
         # simple and NOT fair. It can lead to starvation of some
         # LoRAs. This should be improved in the future.
         self.lora_config = lora_config
+        self.num_preemption: int = 0
 
         version = "selfattn"
         if (self.scheduler_config.task == "embedding"
