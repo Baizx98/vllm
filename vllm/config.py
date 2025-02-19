@@ -733,6 +733,7 @@ class CacheConfig:
         sliding_window: Optional[int] = None,
         enable_prefix_caching: bool = False,
         cpu_offload_gb: float = 0,
+        enable_layer_wise_block: bool = False,
     ) -> None:
         self.block_size = block_size
         self.gpu_memory_utilization = gpu_memory_utilization
@@ -743,10 +744,12 @@ class CacheConfig:
         self.sliding_window = sliding_window
         self.enable_prefix_caching = enable_prefix_caching
         self.cpu_offload_gb = cpu_offload_gb
+        self.enable_layer_wise_block = enable_layer_wise_block
 
         self._verify_args()
         self._verify_cache_dtype()
         self._verify_prefix_caching()
+        self._verify_layer_wise_block()
 
         # Will be set after profiling.
         self.num_gpu_blocks: Optional[int] = None
@@ -783,6 +786,14 @@ class CacheConfig:
             raise NotImplementedError(
                 "Prefix caching is not supported with sliding window. "
                 "Run with --disable-sliding-window to use prefix caching.")
+
+    def _verify_layer_wise_block(self) -> None:
+        if not self.enable_layer_wise_block:
+            return
+
+        if self.enable_prefix_caching:
+            raise NotImplementedError(
+                "Layer-wise block is not supported withprefix caching.")
 
     def verify_with_parallel_config(
         self,
