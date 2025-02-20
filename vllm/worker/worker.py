@@ -265,6 +265,7 @@ class Worker(LocalOrDistributedWorkerBase):
 
         This also warms up the model, which may record CUDA graphs.
         """
+        # TODO need to update this for layer-wise block management
         raise_if_cache_size_invalid(num_gpu_blocks,
                                     self.cache_config.block_size,
                                     self.cache_config.is_attention_free,
