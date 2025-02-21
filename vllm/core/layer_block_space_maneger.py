@@ -37,15 +37,18 @@ class LayerBlockSpaceManager(BlockSpaceManager):
         block_size: int,
         num_gpu_blocks: int,
         num_cpu_blocks: int,
-        num_attn_layers: int,
         watermark: float = 0.01,
         sliding_window: Optional[int] = None,
         enable_caching: bool = False,
+        **kwargs,
     ) -> None:
         self.block_size = block_size
         self.num_gpu_blocks = num_gpu_blocks
         self.num_cpu_blocks = num_cpu_blocks
-        self.num_attn_layers = num_attn_layers
+        if "num_attn_layers" in kwargs:
+            self.num_attn_layers = kwargs["num_attn_layers"]
+        else:
+            raise ValueError("num_attn_layers is required.")
 
         # LayerBlockSpaceManager does not support prefix caching or sliding
         # window now.
@@ -69,7 +72,7 @@ class LayerBlockSpaceManager(BlockSpaceManager):
         )
 
         self.layer_block_tables: List[Dict[SeqId, BlockTable]] = [
-            {} for _ in range(num_attn_layers)
+            {} for _ in range(self.num_attn_layers)
         ]
         # self.layer_cross_block_tables: List[Dict[EncoderSeqId, BlockTable]] =
         # [
@@ -127,8 +130,8 @@ class LayerBlockSpaceManager(BlockSpaceManager):
         """
         Allocate blocks for all attention layers of the sequence for prefill.
         """
-        block_table_list: List[BlockTable] = [] * self.num_attn_layers
-        for layer in range(self.num_attn_layers):
+        block_table_list: List[BlockTable] = []
+        for _ in range(self.num_attn_layers):
             block_table = BlockTable(
                 block_size=self.block_size,
                 block_allocator=self.block_allocator,
@@ -137,7 +140,7 @@ class LayerBlockSpaceManager(BlockSpaceManager):
                 # TODO: check if this is correct, can a token_ids appear in
                 # multiple block_tables of different layers?
                 block_table.allocate(seq.get_token_ids())
-            block_table_list[layer] = block_table
+            block_table_list.append(block_table)
         return block_table_list
 
     def allocate(self, seq_group: SequenceGroup) -> None:

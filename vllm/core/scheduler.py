@@ -8,7 +8,8 @@ from typing import Callable, Deque, Dict, Iterable, List, Optional
 from typing import Sequence as GenericSequence
 from typing import Set, Tuple, Union
 
-from vllm.config import CacheConfig, LoRAConfig, SchedulerConfig
+from vllm.config import (CacheConfig, LoRAConfig, ModelConfig, ParallelConfig,
+                         SchedulerConfig)
 from vllm.core.interfaces import AllocStatus, BlockSpaceManager
 from vllm.logger import init_logger
 from vllm.lora.request import LoRARequest
@@ -301,8 +302,9 @@ class Scheduler:
         self,
         scheduler_config: SchedulerConfig,
         cache_config: CacheConfig,
+        model_config: ModelConfig,
+        parellel_config: ParallelConfig,
         lora_config: Optional[LoRAConfig],
-        pipeline_parallel_size: int = 1,
         output_proc_callback: Optional[Callable] = None,
     ) -> None:
         self.scheduler_config = scheduler_config
@@ -311,6 +313,9 @@ class Scheduler:
         # simple and NOT fair. It can lead to starvation of some
         # LoRAs. This should be improved in the future.
         self.lora_config = lora_config
+        pipeline_parallel_size = parellel_config.pipeline_parallel_size
+        num_attn_layers = model_config.get_num_attention_layers(
+            parellel_config)
 
         version = "selfattn"
         if (self.cache_config.enable_layer_wise_block):
@@ -336,7 +341,9 @@ class Scheduler:
             num_gpu_blocks=num_gpu_blocks,
             num_cpu_blocks=num_cpu_blocks,
             sliding_window=self.cache_config.sliding_window,
-            enable_caching=self.cache_config.enable_prefix_caching)
+            enable_caching=self.cache_config.enable_prefix_caching,
+            num_attn_layers=num_attn_layers,
+        )
 
         # Sequence groups in the WAITING state.
         # Contain new prefill or preempted requests.

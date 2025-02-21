@@ -57,15 +57,14 @@ class SelfAttnBlockSpaceManager(BlockSpaceManager):
             enabled. Defaults to False.
     """
 
-    def __init__(
-        self,
-        block_size: int,
-        num_gpu_blocks: int,
-        num_cpu_blocks: int,
-        watermark: float = 0.01,
-        sliding_window: Optional[int] = None,
-        enable_caching: bool = False,
-    ) -> None:
+    def __init__(self,
+                 block_size: int,
+                 num_gpu_blocks: int,
+                 num_cpu_blocks: int,
+                 watermark: float = 0.01,
+                 sliding_window: Optional[int] = None,
+                 enable_caching: bool = False,
+                 **kwargs) -> None:
         self.block_size = block_size
         self.num_total_gpu_blocks = num_gpu_blocks
         self.num_total_cpu_blocks = num_cpu_blocks
