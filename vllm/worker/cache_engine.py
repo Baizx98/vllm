@@ -1,15 +1,13 @@
 """CacheEngine class for managing the KV cache."""
-from typing import List
-from typing import Union
+from typing import List, Union
 
 import torch
 
 from vllm.attention import get_attn_backend
 from vllm.config import CacheConfig, DeviceConfig, ModelConfig, ParallelConfig
 from vllm.logger import init_logger
-from vllm.utils import (STR_DTYPE_TO_TORCH_DTYPE, get_dtype_size,
+from vllm.utils import (STR_DTYPE_TO_TORCH_DTYPE, FakeList, get_dtype_size,
                         is_pin_memory_available)
-from vllm.utils import FakeList
 
 logger = init_logger(__name__)
 
@@ -76,10 +74,11 @@ class CacheEngine:
         pin_memory = is_pin_memory_available() if device == "cpu" else False
         kv_cache: Union[List[torch.Tensor], FakeList[torch.Tensor]]
         if self.cache_config.enable_layer_wise_block:
-            kv_cache = FakeList(torch.zeros(kv_cache_shape,
-                                            dtype=self.dtype,
-                                            pin_memory=pin_memory,
-                                            device=device),self.num_attention_layers)
+            kv_cache = FakeList(
+                torch.zeros(kv_cache_shape,
+                            dtype=self.dtype,
+                            pin_memory=pin_memory,
+                            device=device), self.num_attention_layers)
         else:
             kv_cache = []
             for _ in range(self.num_attention_layers):
@@ -91,7 +90,7 @@ class CacheEngine:
                                 dtype=self.dtype,
                                 pin_memory=pin_memory,
                                 device=device))
-        return kv_cache # type: ignore
+        return kv_cache  # type: ignore
 
     def swap_in(self, src_to_dst: torch.Tensor) -> None:
         for i in range(self.num_attention_layers):
@@ -122,7 +121,8 @@ class CacheEngine:
         if cache_config.enable_layer_wise_block:
             total = key_cache_block + value_cache_block
         else:
-            total = num_attention_layers * (key_cache_block + value_cache_block)
+            total = num_attention_layers * (key_cache_block +
+                                            value_cache_block)
         if cache_config.cache_dtype == "auto":
             dtype = model_config.dtype
         else:

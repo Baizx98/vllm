@@ -1581,34 +1581,38 @@ def direct_register_custom_op(
     if fake_impl is not None:
         my_lib._register_fake(op_name, fake_impl)
 
+
 V = TypeVar('V')
+
+
 class FakeList(Generic[V]):
+
     def __init__(self, data: V, len: int):
         self.data: V = data
         self.len: int = len
 
-    def __getitem__(self, idx: int)->V:
+    def __getitem__(self, idx: int) -> V:
         if isinstance(idx, int):
             if idx >= self.len:
                 raise IndexError("Index out of range")
             return self.data
         else:
             raise TypeError("Index must be an integer")
-    
-    def __setitem__(self, idx: int, value: V)->None:
+
+    def __setitem__(self, idx: int, value: V) -> None:
         if isinstance(idx, int):
             if idx >= self.len:
                 raise IndexError("Index out of range")
             self.data = value
         else:
             raise TypeError("Index must be an integer")
-    
-    def __len__(self)->int:
+
+    def __len__(self) -> int:
         return self.len
-    
+
     def __iter__(self):
         for _ in range(self.len):
             yield self.data
 
-    def append(self, value: V)->None:
+    def append(self, value: V) -> None:
         ...
