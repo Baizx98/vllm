@@ -94,7 +94,8 @@ class CacheEngine:
 
     def swap_in(self, src_to_dst: torch.Tensor) -> None:
         if self.cache_config.enable_layer_wise_block:
-            self.attn_backend.swap_blocks(self.cpu_cache, self.gpu_cache, src_to_dst) # type: ignore
+            self.attn_backend.swap_blocks(self.cpu_cache, self.gpu_cache,
+                                          src_to_dst)  # type: ignore
             return
         for i in range(self.num_attention_layers):
             self.attn_backend.swap_blocks(self.cpu_cache[i], self.gpu_cache[i],
@@ -102,7 +103,8 @@ class CacheEngine:
 
     def swap_out(self, src_to_dst: torch.Tensor) -> None:
         if self.cache_config.enable_layer_wise_block:
-            self.attn_backend.swap_blocks(self.gpu_cache, self.cpu_cache, src_to_dst) # type: ignore
+            self.attn_backend.swap_blocks(self.gpu_cache, self.cpu_cache,
+                                          src_to_dst)  # type: ignore
             return
         for i in range(self.num_attention_layers):
             self.attn_backend.swap_blocks(self.gpu_cache[i], self.cpu_cache[i],
