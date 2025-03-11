@@ -111,7 +111,7 @@ class CacheEngine:
                                           src_to_dst)
 
     def copy(self, src_to_dsts: torch.Tensor) -> None:
-        # TODO need to chage this to support layer-wise block?
+        # TODO need to change this to support layer-wise block?
         self.attn_backend.copy_blocks(self.gpu_cache, src_to_dsts)
 
     @staticmethod
