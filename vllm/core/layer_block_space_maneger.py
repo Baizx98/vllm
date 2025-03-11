@@ -271,6 +271,12 @@ class LayerBlockSpaceManager(BlockSpaceManager):
 
     def get_block_table(self, seq: Sequence):
         return None
+    
+    def get_layer_block_table(self, seq: Sequence) -> List[BlockTable]:
+        layer_block_table = []
+        for layer in range(self.num_attn_layers):
+            layer_block_table.append(self.block_tables(layer)[seq.seq_id])
+        return layer_block_table
 
     def get_block_table_layer(self, seq: Sequence, layer: int) -> List[int]:
         block_ids = self.block_tables(layer)[seq.seq_id].physical_block_ids
