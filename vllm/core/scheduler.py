@@ -314,7 +314,7 @@ class Scheduler:
         # LoRAs. This should be improved in the future.
         self.lora_config = lora_config
         pipeline_parallel_size = parellel_config.pipeline_parallel_size
-        num_attn_layers = model_config.get_num_attention_layers(
+        self.num_attn_layers = model_config.get_num_attention_layers(
             parellel_config)
 
         version = "selfattn"
@@ -342,7 +342,7 @@ class Scheduler:
             num_cpu_blocks=num_cpu_blocks,
             sliding_window=self.cache_config.sliding_window,
             enable_caching=self.cache_config.enable_prefix_caching,
-            num_attn_layers=num_attn_layers,
+            num_attn_layers=self.num_attn_layers,
         )
 
         # Sequence groups in the WAITING state.
@@ -1245,11 +1245,20 @@ class Scheduler:
                 self.cache_id].get_object()
             seq_group_metadata.seq_data.clear()
             seq_group_metadata.block_tables.clear()
+            if self.cache_config.enable_layer_wise_block:
+                seq_group_metadata.layer_block_tables.clear()
 
             # seq_id -> SequenceData
             seq_data: Dict[int, SequenceData] = {}
             # seq_id -> physical block numbers
             block_tables: Dict[int, List[int]] = {}
+            # layer_id : block_tables
+            if self.cache_config.enable_layer_wise_block:
+                layer_block_tables: List[Dict[int, List[int]]] = [
+                    {} for _ in range(self.num_attn_layers)
+                ]
+            else:
+                layer_block_tables = []
 
             if seq_group.is_encoder_decoder():
                 # Encoder associated with SequenceGroup
@@ -1268,6 +1277,13 @@ class Scheduler:
                 seq_id = seq.seq_id
                 seq_data[seq_id] = seq.data
                 block_tables[seq_id] = self.block_manager.get_block_table(seq)
+                # Temporarily feature.
+                if self.cache_config.enable_layer_wise_block:
+                    layer_block_table = (
+                        self.block_manager.get_layer_block_table(seq))
+                    for layer, block_table in enumerate(layer_block_table):
+                        layer_block_tables[layer][seq_id] = block_table
+
                 self.block_manager.access_all_blocks_in_seq(seq, now)
 
             if self.cache_config.enable_prefix_caching:
@@ -1304,6 +1320,7 @@ class Scheduler:
                     seq_data=seq_data,
                     sampling_params=seq_group.sampling_params,
                     block_tables=block_tables,
+                    layer_block_tables=layer_block_tables,
                     do_sample=do_sample,
                     pooling_params=seq_group.pooling_params,
                     token_chunk_size=token_chunk_size,
@@ -1333,6 +1350,7 @@ class Scheduler:
                     seq_data_delta,
                     seq_group.request_id,
                     block_tables,
+                    layer_block_tables,
                     is_prompt,
                     do_sample=do_sample,
                     token_chunk_size=token_chunk_size,
