@@ -213,6 +213,11 @@ class AttentionMetadataBuilder(ABC, Generic[T]):
         """Build attention metadata with on-device tensors."""
         raise NotImplementedError
 
+    def build_list(self, seq_lens: List[int], query_lens: List[int],
+                   cuda_graph_pad_size: int, batch_size: int) -> T:
+        """Build attention metadata with on-device tensors."""
+        raise NotImplementedError
+
 
 class AttentionImpl(ABC, Generic[T]):
 

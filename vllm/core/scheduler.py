@@ -275,7 +275,8 @@ def seq_group_metadata_builder():
                                  is_prompt=False,
                                  seq_data={},
                                  sampling_params=None,
-                                 block_tables={})
+                                 block_tables={},
+                                 layer_block_tables=[])
 
 
 def scheduler_running_outputs_builder():
@@ -1277,12 +1278,12 @@ class Scheduler:
                 seq_id = seq.seq_id
                 seq_data[seq_id] = seq.data
                 block_tables[seq_id] = self.block_manager.get_block_table(seq)
-                # Temporarily feature.
+                # TODO Temporarily feature.
                 if self.cache_config.enable_layer_wise_block:
-                    layer_block_table = (
-                        self.block_manager.get_layer_block_table(seq))
-                    for layer, block_table in enumerate(layer_block_table):
-                        layer_block_tables[layer][seq_id] = block_table
+                    for layer in range(self.num_attn_layers):
+                        layer_block_tables[layer][seq_id] = (
+                            self.block_manager.get_block_table_layer(
+                                seq, layer))
 
                 self.block_manager.access_all_blocks_in_seq(seq, now)
 

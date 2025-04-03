@@ -89,6 +89,7 @@ class Worker(LocalOrDistributedWorkerBase):
         # initialize_cache.
         self.cache_engine: List[CacheEngine]
         # Initialize gpu_cache as embedding models don't initialize kv_caches
+        # NOTE 当启用layer_wise_block时，gpu_cache是一个FakeList的List
         self.gpu_cache: Optional[List[List[torch.Tensor]]] = None
         self._seq_group_metadata_cache: Dict[str, SequenceGroupMetadata] = {}
 

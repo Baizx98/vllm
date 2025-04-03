@@ -321,6 +321,7 @@ class LlamaModel(nn.Module):
         positions: torch.Tensor,
         kv_caches: List[torch.Tensor],
         attn_metadata: AttentionMetadata,
+        attn_metadata_list: List[AttentionMetadata],
         intermediate_tensors: Optional[IntermediateTensors],
         inputs_embeds: Optional[torch.Tensor] = None,
     ) -> Union[torch.Tensor, IntermediateTensors]:
@@ -336,6 +337,7 @@ class LlamaModel(nn.Module):
             residual = intermediate_tensors["residual"]
 
         for i in range(self.start_layer, self.end_layer):
+            attn_metadata = attn_metadata_list[i - self.start_layer]
             layer = self.layers[i]
             hidden_states, residual = layer(positions, hidden_states,
                                             kv_caches[i - self.start_layer],
@@ -544,10 +546,12 @@ class LlamaForCausalLM(nn.Module, SupportsLoRA, SupportsPP):
         positions: torch.Tensor,
         kv_caches: List[torch.Tensor],
         attn_metadata: AttentionMetadata,
+        attn_metadata_list: List[AttentionMetadata],
         intermediate_tensors: Optional[IntermediateTensors] = None,
     ) -> Union[torch.Tensor, IntermediateTensors]:
         model_output = self.model(input_ids, positions, kv_caches,
-                                  attn_metadata, intermediate_tensors)
+                                  attn_metadata, attn_metadata_list,
+                                  intermediate_tensors)
         return model_output
 
     def compute_logits(

@@ -872,6 +872,8 @@ class SequenceGroupMetadataDelta(
     seq_data_delta: Dict[int, SequenceDataDelta]
     request_id: str
     block_tables: Dict[int, List[int]]
+    layer_block_tables: List[Dict[int,
+                                  List[int]]]  # TODO Temporary parameters.
     is_prompt: bool
     do_sample: bool = True
     token_chunk_size: Optional[int] = None
@@ -894,6 +896,7 @@ class SequenceGroupMetadata(
         sampling_params: The sampling parameters used to generate the outputs.
         block_tables: The block tables. (Seq id -> list of physical block
             numbers)
+        layer_block_tables: The layer block tables. (Layer -> block tables)
         do_sample: True if sampling is required. Sampling is not required when
             e.g., prefill is chunked, and the current iteration only computes
             query tokens for prefill, we don't need sampling.
@@ -922,6 +925,8 @@ class SequenceGroupMetadata(
     seq_data: Dict[int, SequenceData]
     sampling_params: Optional[SamplingParams]
     block_tables: Dict[int, List[int]]
+    layer_block_tables: List[Dict[int,
+                                  List[int]]]  # TODO Temporary parameters.
     do_sample: bool = True
     pooling_params: Optional[PoolingParams] = None
     lora_request: Optional[LoRARequest] = None
@@ -987,6 +992,8 @@ class SequenceGroupMetadata(
             self.seq_data[id].apply_delta(delta)
         assert self.request_id == sequence_group_metadata_delta.request_id
         self.block_tables = sequence_group_metadata_delta.block_tables
+        self.layer_block_tables = (
+            sequence_group_metadata_delta.layer_block_tables)
         self.token_chunk_size = sequence_group_metadata_delta.token_chunk_size
         self.do_sample = sequence_group_metadata_delta.do_sample
         self.is_prompt = sequence_group_metadata_delta.is_prompt
