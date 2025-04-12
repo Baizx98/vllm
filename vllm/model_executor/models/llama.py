@@ -279,6 +279,18 @@ class LlamaModel(nn.Module):
         quant_config = vllm_config.quant_config
         lora_config = vllm_config.lora_config
 
+        self.enable_layer_wise_block = cache_config.enable_layer_wise_block
+        # FIXME get_num_attention_layers and get_num_hidden_layers are different
+        # We should use them according to the model type
+        # Get the number of attention layers in current PP rank
+        self.num_attn_layers = (
+            vllm_config.model_config.get_num_attention_layers(vllm_config.parallel_config)
+        )
+        self.cuurent_attn_layer = 0
+        self.is_rank_end = False
+        self.intermediate_tensors = make_empty_intermediate_tensors_factory(
+            ["hidden_states", "residual"], config.hidden_size)
+
         self.config = config
         self.padding_idx = config.pad_token_id
         lora_vocab = (lora_config.lora_extra_vocab_size *
@@ -314,8 +326,13 @@ class LlamaModel(nn.Module):
 
     def get_input_embeddings(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.embed_tokens(input_ids)
+    
+    def update_current_attn_layer(self) -> None:
+        self.cuurent_attn_layer += 1
+        if self.cuurent_attn_layer == (self.num_attn_layers-1):
+            self.cuurent_attn_layer = 0
 
-    def forward(
+    def orginal_forward(
         self,
         input_ids: Optional[torch.Tensor],
         positions: torch.Tensor,
@@ -349,6 +366,116 @@ class LlamaModel(nn.Module):
 
         hidden_states, _ = self.norm(hidden_states, residual)
         return hidden_states
+    
+    def layer_step_forward(
+        self,
+        input_ids: Optional[torch.Tensor],
+        positions: torch.Tensor,
+        kv_caches: List[torch.Tensor],
+        attn_metadata: AttentionMetadata,
+        intermediate_tensors: Optional[IntermediateTensors],
+        inputs_embeds: Optional[torch.Tensor] = None,
+    ) -> Union[torch.Tensor, IntermediateTensors]:
+        
+        # There are nine cases:
+        # 1. First rank and first layer: 在这之前处理input_embeds，
+        # 执行完第一层后保存intermediate_tensors到类变量然后返回
+        # 2. First rank and middle layer: 从类变量中取出intermediate_tensors，
+        # 执行完当前层后保存intermediate_tensors到类变量然后返回
+        # 3. First rank and last layer: 从类变量中取出intermediate_tensors，
+        # 执行完当前层后返回intermediate_tensors，清空类变量，重置状态
+        # 4. Middle rank and first layer: 从函数参数中取出intermediate_tensors，
+        # 执行完当前层后保存intermediate_tensors到类变量然后返回
+        # 5. Middle rank and middle layer: 从类变量中取出intermediate_tensors，
+        # 执行完当前层后保存intermediate_tensors到类变量然后返回
+        # 6. Middle rank and last layer: 从类变量中取出intermediate_tensors，
+        # 执行完当前层后返回intermediate_tensors，清空类变量，重置状态
+        # 7. Last rank and first layer: 从函数参数中取出intermediate_tensors，
+        # 执行完当前层后保存intermediate_tensors到类变量然后返回
+        # 8. Last rank and middle layer: 从类变量中取出intermediate_tensors，
+        # 执行完当前层后保存intermediate_tensors到类变量然后返回
+        # 9. Last rank and last layer: 从类变量中取出intermediate_tensors，
+        # 执行完当前层后,处理norm，返回hidden_states，清空类变量，重置状态
+        # NOTE 这里需要返回rank end状态吗？我觉得不需要
+
+        current_layer_idx = self.cuurent_attn_layer
+        layer_idx = self.start_layer + current_layer_idx
+        layer = self.layers[layer_idx]
+
+        # 输入阶段处理
+        if get_pp_group().is_first_rank and current_layer_idx == 0:
+            if inputs_embeds is not None:
+                hidden_states = inputs_embeds
+            else:
+                hidden_states = self.get_input_embeddings(input_ids)
+            residual = None
+        elif current_layer_idx == 0:
+            assert (
+                intermediate_tensors is not None
+            ), "Intermediate tensors must be provided for non-first ranks"
+            hidden_states = intermediate_tensors["hidden_states"]
+            residual = intermediate_tensors["residual"]
+        else: # not first and not first layer of this rank
+            hidden_states = self.intermediate_tensors["hidden_states"]
+            residual = self.intermediate_tensors["residual"]
+
+        # 当前层执行
+        hidden_states, residual = layer(
+            positions,
+            hidden_states,
+            kv_caches[current_layer_idx],
+            attn_metadata,
+            residual
+        )
+        # 更新类变量，不影响下面的函数内部变量的值
+        self.update_current_attn_layer()
+
+
+        # 末层逻辑
+        if current_layer_idx == (self.num_attn_layers - 1):
+            self.cuurent_attn_layer = 0
+            self.intermediate_tensors = None
+            if get_pp_group().is_last_rank:
+                hidden_states, _ = self.norm(hidden_states, residual)
+                return hidden_states
+            else:
+                return IntermediateTensors({
+                    "hidden_states": hidden_states,
+                    "residual": residual
+                })
+        else:
+            # 中间层逻辑，缓存并准备下次 forward，只要不是last layer就执行
+            self.intermediate_tensors["hidden_states"] = hidden_states
+            self.intermediate_tensors["residual"] = residual
+        return self.intermediate_tensors
+
+    def forward(
+        self,
+        input_ids: Optional[torch.Tensor],
+        positions: torch.Tensor,
+        kv_caches: List[torch.Tensor],
+        attn_metadata: AttentionMetadata,
+        intermediate_tensors: Optional[IntermediateTensors],
+        inputs_embeds: Optional[torch.Tensor] = None,
+    ) -> Union[torch.Tensor, IntermediateTensors]:
+        if not self.enable_layer_wise_block:
+            return self.orginal_forward(
+                input_ids,
+                positions,
+                kv_caches,
+                attn_metadata,
+                intermediate_tensors,
+                inputs_embeds,
+            )
+        else:
+            return self.layer_step_forward(
+                input_ids,
+                positions,
+                kv_caches,
+                attn_metadata,
+                intermediate_tensors,
+                inputs_embeds,
+            )
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         stacked_params_mapping = [
