@@ -350,3 +350,35 @@ def is_attention_free(
         return isinstance(model, _IsAttentionFreeType)
 
     return isinstance(model, IsAttentionFree)
+
+@runtime_checkable
+class SupportsLayerStep(Protocol):
+    """Interface for model instances that support layer-wise stepping."""
+    def is_first_attn_layer(self) -> bool: ...
+    def is_last_attn_layer(self) -> bool: ...
+    def current_attn_layer(self) -> int: ...
+    
+    @property
+    def num_attn_layers(self) -> int: ...
+
+@runtime_checkable
+class _SupportsLayerStepType(Protocol):
+    """Interface for model *classes* that support layer-wise stepping."""
+    def is_first_attn_layer(self, instance) -> bool: ...
+    def is_last_attn_layer(self, instance) -> bool: ...
+    def current_attn_layer(self, instance) -> int: ...
+    
+    @property
+    def num_attn_layers(self) -> int: ...
+
+
+@overload
+def supports_layer_step(model: object) -> bool: ...
+@overload
+def supports_layer_step(model: Type[object]) -> bool: ...
+
+def supports_layer_step(model: Union[Type[object], object]) -> bool:
+    """判断模型类或实例是否支持逐层 attn 层执行。"""
+    if isinstance(model, type):
+        return isinstance(model, _SupportsLayerStepType)
+    return isinstance(model, SupportsLayerStep)
