@@ -289,3 +289,17 @@ class ModelRunnerBase(ABC, Generic[T]):
                 self.generators.pop(request_id, None)
 
         return self.generators
+
+    @property
+    def is_first_attn_layer(self) -> Optional[bool]:
+        """
+        Return True if this is the first attention layer in the model.
+        """
+        return None
+
+    @property
+    def is_last_attn_layer(self) -> Optional[bool]:
+        """
+        Return True if this is the last attention layer in the model.
+        """
+        return None

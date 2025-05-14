@@ -308,22 +308,47 @@ class LocalOrDistributedWorkerBase(WorkerBase):
         else:
             return self._get_worker_input_from_broadcast()
 
+    def delta_prepare_input(
+        self,
+        execute_model_req: Optional[ExecuteModelRequest] = None
+    ) -> Optional[Tuple[BroadcastableModelInput, WorkerInput, Dict[
+            str, torch.Tensor]]]:
+        """
+        Prepare the inputs for delta execution.
+        """
+
+        pass
+
     def execute_model(
         self,
         execute_model_req: Optional[ExecuteModelRequest] = None,
     ) -> Optional[List[SamplerOutput]]:
         """Executes at least one model step on the given sequences, unless no
         sequences are provided."""
+        enable_layer_wise_block = self.cache_config.enable_layer_wise_block
+        # 理论上时间计算需要在层级别累积，但是我们先不实现它，因为目前不考虑PP
         start_time = time.perf_counter()
 
-        inputs = self.prepare_input(execute_model_req)
+        # inputs 尤其是model_input中的slot mapping和attn metadata需要重新生成
+        # 其它的数据应该复用上一层的结果
+        # 这里需要设计一套缓存机制来保存第一层到最后一层的输入
+        # 在第一层初始化完毕，之后每层进行更新
+        if self.is_first_attn_layer:
+            inputs = self.prepare_input(execute_model_req)
+        else:
+            # TODO
+            inputs = self.prepare_input(execute_model_req)
+            # inputs =self.delta_prepare_input(execute_model_req)
         if inputs is None:
             return None
 
         model_input, worker_input, kwargs = inputs
         num_steps = worker_input.num_steps
-
-        self.execute_worker(worker_input)
+        if enable_layer_wise_block:
+            if self.is_first_attn_layer:
+                self.execute_worker(worker_input)
+        else:
+            self.execute_worker(worker_input)
 
         # If there is no input, we don't need to execute the model.
         if worker_input.num_seq_groups == 0:
@@ -331,7 +356,11 @@ class LocalOrDistributedWorkerBase(WorkerBase):
 
         intermediate_tensors = None
         orig_model_execute_time = 0.0
-        if not get_pp_group().is_first_rank:
+        # 还需要从modelrunner的model中获取执行层数的情况
+        # 如果不是第一个rank，且是第一层，才执行下面的逻辑
+        if (not enable_layer_wise_block and get_pp_group().is_first_rank) or (
+                enable_layer_wise_block and self.is_first_attn_layer):
+            # if not get_pp_group().is_first_rank:
             intermediate_tensors = IntermediateTensors(
                 get_pp_group().recv_tensor_dict(
                     all_gather_group=get_tp_group()))
@@ -350,7 +379,12 @@ class LocalOrDistributedWorkerBase(WorkerBase):
         )
 
         model_execute_time = time.perf_counter() - start_time
-        if not get_pp_group().is_last_rank:
+        # 不是最后一个rank，且是当前rank的最后一个层时，才执行下面的逻辑
+        # 当不开启layer wise block时，还保留现在的逻辑
+        if (not enable_layer_wise_block and not get_pp_group().is_last_rank
+            ) or (enable_layer_wise_block and (not get_pp_group().is_last_rank
+                                               and self.is_last_attn_layer)):
+            # if not get_pp_group().is_last_rank:
             # output is IntermediateTensors
             if (self.observability_config is not None
                     and self.observability_config.collect_model_execute_time):
@@ -403,6 +437,14 @@ class LocalOrDistributedWorkerBase(WorkerBase):
             intermediate_tensors=intermediate_tensors,
             **kwargs,
         )
+
+    @property
+    def is_first_attn_layer(self) -> Optional[bool]:
+        return self.model_runner.is_first_attn_layer
+
+    @property
+    def is_last_attn_layer(self) -> Optional[bool]:
+        return self.model_runner.is_first_attn_layer
 
 
 class WorkerWrapperBase:

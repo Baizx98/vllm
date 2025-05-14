@@ -314,6 +314,9 @@ class LLMEngine:
         self.log_stats = log_stats
         self.use_cached_outputs = use_cached_outputs
 
+        self.num_attn_layers = model_config.get_num_attention_layers(
+            parallel_config)
+
         if not self.model_config.skip_tokenizer_init:
             self.tokenizer = self._init_tokenizer()
             self.detokenizer = Detokenizer(self.tokenizer)
@@ -1328,6 +1331,14 @@ class LLMEngine:
                 else:
                     seq.append_token_id(sample.output_token, sample.logprobs)
 
+    def layer_step(self, execute_model_req: ExecuteModelRequest,
+                   layer_id: int):
+        # 负责层的换入换出
+        execute_model_req.next_block_table(layer_id)
+        output = self.model_executor.execute_model(
+            execute_model_req=execute_model_req)
+        return output
+
     def step(self) -> List[Union[RequestOutput, EmbeddingRequestOutput]]:
         """Performs one decoding iteration and returns newly generated results.
 
@@ -1454,8 +1465,14 @@ class LLMEngine:
                 execute_model_req.async_callback = self.async_callbacks[
                     virtual_engine]
 
-            outputs = self.model_executor.execute_model(
-                execute_model_req=execute_model_req)
+            # Fake variable for the number of layers in the model
+            if self.cache_config.enable_layer_wise_block:
+                attn_num_layers = 20
+                for layer in range(attn_num_layers):
+                    outputs = self.layer_step(execute_model_req, layer)
+            else:
+                outputs = self.model_executor.execute_model(
+                    execute_model_req=execute_model_req)
 
             # We need to do this here so that last step's sampled_token_ids can
             # be passed to the next iteration for PP.

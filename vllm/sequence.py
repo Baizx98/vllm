@@ -872,12 +872,17 @@ class SequenceGroupMetadataDelta(
     seq_data_delta: Dict[int, SequenceDataDelta]
     request_id: str
     block_tables: Dict[int, List[int]]
+    layer_block_tables: List[Dict[int, List[int]]]
     is_prompt: bool
     do_sample: bool = True
     token_chunk_size: Optional[int] = None
     computed_block_nums: Optional[List[int]] = None
     state: Optional[SequenceGroupState] = msgspec.field(
         default_factory=lambda: SequenceGroupState())
+
+    def update_block_table(self, layer_id: int):
+        """Update the block table with the given layer id."""
+        self.block_tables = self.layer_block_tables[layer_id]
 
 
 class SequenceGroupMetadata(
@@ -894,6 +899,7 @@ class SequenceGroupMetadata(
         sampling_params: The sampling parameters used to generate the outputs.
         block_tables: The block tables. (Seq id -> list of physical block
             numbers)
+        layer_block_tables: The layer block tables. (Layer id -> Seq id -> list)
         do_sample: True if sampling is required. Sampling is not required when
             e.g., prefill is chunked, and the current iteration only computes
             query tokens for prefill, we don't need sampling.
@@ -922,6 +928,7 @@ class SequenceGroupMetadata(
     seq_data: Dict[int, SequenceData]
     sampling_params: Optional[SamplingParams]
     block_tables: Dict[int, List[int]]
+    layer_block_tables: List[Dict[int, List[int]]]
     do_sample: bool = True
     pooling_params: Optional[PoolingParams] = None
     lora_request: Optional[LoRARequest] = None
@@ -987,6 +994,8 @@ class SequenceGroupMetadata(
             self.seq_data[id].apply_delta(delta)
         assert self.request_id == sequence_group_metadata_delta.request_id
         self.block_tables = sequence_group_metadata_delta.block_tables
+        self.layer_block_tables = (
+            sequence_group_metadata_delta.layer_block_tables)
         self.token_chunk_size = sequence_group_metadata_delta.token_chunk_size
         self.do_sample = sequence_group_metadata_delta.do_sample
         self.is_prompt = sequence_group_metadata_delta.is_prompt
@@ -996,6 +1005,10 @@ class SequenceGroupMetadata(
         assert self.state.current_step < self.state.num_steps, \
             f"current step {self.state.current_step}, num_steps {self.state.num_steps}" # noqa
         self.state.current_step += 1
+
+    def update_block_table(self, layer_id: int):
+        """Update the block table with the given layer id."""
+        self.block_tables = self.layer_block_tables[layer_id]
 
 
 class SequenceOutput(
@@ -1324,6 +1337,12 @@ class ExecuteModelRequest(
             last_sampled_token_ids=self.last_sampled_token_ids.clone()
             if self.last_sampled_token_ids is not None else None,
             async_callback=self.async_callback)
+
+    def next_block_table(self, layer_id: int):
+        """Update the block_table with next layer's block table for
+        layer-wise block manager"""
+        for seq_group_metadata in self.seq_group_metadata_list:
+            seq_group_metadata.update_block_table(layer_id)
 
 
 @dataclass

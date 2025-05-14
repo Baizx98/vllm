@@ -3,7 +3,7 @@ import os
 from vllm import LLM, SamplingParams
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 # Sample prompts.
 prompts = [
     "Hello, my name is",

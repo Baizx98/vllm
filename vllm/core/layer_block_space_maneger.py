@@ -271,7 +271,7 @@ class LayerBlockSpaceManager(BlockSpaceManager):
 
     def get_block_table(self, seq: Sequence):
         return None
-    
+
     def get_layer_block_table(self, seq: Sequence) -> List[BlockTable]:
         layer_block_table = []
         for layer in range(self.num_attn_layers):

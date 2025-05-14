@@ -52,7 +52,7 @@ from vllm.model_executor.sampling_metadata import SamplingMetadata
 from vllm.platforms import current_platform
 from vllm.sequence import IntermediateTensors, PoolerOutput
 
-from .interfaces import SupportsLoRA, SupportsPP
+from .interfaces import SupportsLayerStep, SupportsLoRA, SupportsPP
 from .utils import (AutoWeightsLoader, PPMissingLayer, is_pp_missing_parameter,
                     make_empty_intermediate_tensors_factory, make_layers,
                     maybe_prefix)
@@ -284,8 +284,8 @@ class LlamaModel(nn.Module):
         # We should use them according to the model type
         # Get the number of attention layers in current PP rank
         self.num_attn_layers = (
-            vllm_config.model_config.get_num_attention_layers(vllm_config.parallel_config)
-        )
+            vllm_config.model_config.get_num_attention_layers(
+                vllm_config.parallel_config))
         self.cuurent_attn_layer = 0
         self.is_rank_end = False
         self.intermediate_tensors = make_empty_intermediate_tensors_factory(
@@ -326,10 +326,10 @@ class LlamaModel(nn.Module):
 
     def get_input_embeddings(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.embed_tokens(input_ids)
-    
+
     def update_current_attn_layer(self) -> None:
         self.cuurent_attn_layer += 1
-        if self.cuurent_attn_layer == (self.num_attn_layers-1):
+        if self.cuurent_attn_layer == (self.num_attn_layers - 1):
             self.cuurent_attn_layer = 0
 
     def orginal_forward(
@@ -366,7 +366,7 @@ class LlamaModel(nn.Module):
 
         hidden_states, _ = self.norm(hidden_states, residual)
         return hidden_states
-    
+
     def layer_step_forward(
         self,
         input_ids: Optional[torch.Tensor],
@@ -376,7 +376,7 @@ class LlamaModel(nn.Module):
         intermediate_tensors: Optional[IntermediateTensors],
         inputs_embeds: Optional[torch.Tensor] = None,
     ) -> Union[torch.Tensor, IntermediateTensors]:
-        
+
         # There are nine cases:
         # 1. First rank and first layer: 在这之前处理input_embeds，
         # 执行完第一层后保存intermediate_tensors到类变量然后返回
@@ -415,21 +415,16 @@ class LlamaModel(nn.Module):
             ), "Intermediate tensors must be provided for non-first ranks"
             hidden_states = intermediate_tensors["hidden_states"]
             residual = intermediate_tensors["residual"]
-        else: # not first and not first layer of this rank
+        else:  # not first and not first layer of this rank
             hidden_states = self.intermediate_tensors["hidden_states"]
             residual = self.intermediate_tensors["residual"]
 
         # 当前层执行
-        hidden_states, residual = layer(
-            positions,
-            hidden_states,
-            kv_caches[current_layer_idx],
-            attn_metadata,
-            residual
-        )
+        hidden_states, residual = layer(positions, hidden_states,
+                                        kv_caches[current_layer_idx],
+                                        attn_metadata, residual)
         # 更新类变量，不影响下面的函数内部变量的值
         self.update_current_attn_layer()
-
 
         # 末层逻辑
         if current_layer_idx == (self.num_attn_layers - 1):
@@ -562,7 +557,7 @@ class LlamaModel(nn.Module):
                                    "factor attribute!")
 
 
-class LlamaForCausalLM(nn.Module, SupportsLoRA, SupportsPP):
+class LlamaForCausalLM(nn.Module, SupportsLoRA, SupportsPP, SupportsLayerStep):
     packed_modules_mapping = {
         "qkv_proj": ["q_proj", "k_proj", "v_proj"],
         "gate_up_proj": ["gate_proj", "up_proj"]
@@ -743,6 +738,23 @@ class LlamaForCausalLM(nn.Module, SupportsLoRA, SupportsPP):
                 name = name.replace(item, mapping[item])
 
         return name, loaded_weight
+
+    @property
+    def is_first_attn_layer(self) -> bool:
+        return self.model.cuurent_attn_layer == 0
+
+    @property
+    def is_last_attn_layer(self) -> bool:
+        return self.model.cuurent_attn_layer == (self.model.num_attn_layers -
+                                                 1)
+
+    @property
+    def current_attn_layer(self) -> int:
+        return self.model.cuurent_attn_layer
+
+    @property
+    def num_attn_layers(self) -> int:
+        return self.model.num_attn_layers
 
 
 class LlamaEmbeddingModel(nn.Module, SupportsLoRA, SupportsPP):

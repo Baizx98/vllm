@@ -275,7 +275,8 @@ def seq_group_metadata_builder():
                                  is_prompt=False,
                                  seq_data={},
                                  sampling_params=None,
-                                 block_tables={})
+                                 block_tables={},
+                                 layer_block_tables=[])
 
 
 def scheduler_running_outputs_builder():
@@ -303,7 +304,7 @@ class Scheduler:
         scheduler_config: SchedulerConfig,
         cache_config: CacheConfig,
         model_config: ModelConfig,
-        parellel_config: ParallelConfig,
+        parallel_config: ParallelConfig,
         lora_config: Optional[LoRAConfig],
         output_proc_callback: Optional[Callable] = None,
     ) -> None:
@@ -313,9 +314,9 @@ class Scheduler:
         # simple and NOT fair. It can lead to starvation of some
         # LoRAs. This should be improved in the future.
         self.lora_config = lora_config
-        pipeline_parallel_size = parellel_config.pipeline_parallel_size
+        pipeline_parallel_size = parallel_config.pipeline_parallel_size
         self.num_attn_layers = model_config.get_num_attention_layers(
-            parellel_config)
+            parallel_config)
 
         version = "selfattn"
         if (self.cache_config.enable_layer_wise_block):
@@ -1276,8 +1277,9 @@ class Scheduler:
             for seq in seq_group.get_seqs(status=SequenceStatus.RUNNING):
                 seq_id = seq.seq_id
                 seq_data[seq_id] = seq.data
+                # block_table is None if enable_layer_wise_block is True.
                 block_tables[seq_id] = self.block_manager.get_block_table(seq)
-                # Temporarily feature.
+                # Forever feature.
                 if self.cache_config.enable_layer_wise_block:
                     layer_block_table = (
                         self.block_manager.get_layer_block_table(seq))

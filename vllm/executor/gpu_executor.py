@@ -123,6 +123,9 @@ class GPUExecutor(ExecutorBase):
     def execute_model(
         self, execute_model_req: ExecuteModelRequest
     ) -> Optional[List[Union[SamplerOutput, PoolerOutput]]]:
+        # 此处没有任何额外的针对不同的层或rank的特殊处理
+        # 只是worker中execute_model的简单的封装
+        # 所以不需要任何额外的处理
         output = self.driver_worker.execute_model(execute_model_req)
         return output
 
