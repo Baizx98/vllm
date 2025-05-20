@@ -303,3 +303,6 @@ class ModelRunnerBase(ABC, Generic[T]):
         Return True if this is the last attention layer in the model.
         """
         return None
+
+    def update_current_attn_layer(self) -> None:
+        ...

@@ -116,6 +116,9 @@ class WorkerBase(ABC):
     def list_loras(self) -> Set[int]:
         raise NotImplementedError
 
+    def update_current_attn_layer(self) -> None:
+        raise NotImplementedError
+
 
 class LoraNotSupportedWorkerBase(WorkerBase):
     """Partial implementation of WorkerBase that raises exceptions when LoRA
@@ -358,8 +361,9 @@ class LocalOrDistributedWorkerBase(WorkerBase):
         orig_model_execute_time = 0.0
         # 还需要从modelrunner的model中获取执行层数的情况
         # 如果不是第一个rank，且是第一层，才执行下面的逻辑
-        if (not enable_layer_wise_block and get_pp_group().is_first_rank) or (
-                enable_layer_wise_block and self.is_first_attn_layer):
+        if (not enable_layer_wise_block and not get_pp_group().is_first_rank
+            ) or (enable_layer_wise_block and self.is_first_attn_layer
+                  and not get_pp_group().is_first_rank):
             # if not get_pp_group().is_first_rank:
             intermediate_tensors = IntermediateTensors(
                 get_pp_group().recv_tensor_dict(
@@ -444,7 +448,10 @@ class LocalOrDistributedWorkerBase(WorkerBase):
 
     @property
     def is_last_attn_layer(self) -> Optional[bool]:
-        return self.model_runner.is_first_attn_layer
+        return self.model_runner.is_last_attn_layer
+
+    def update_current_attn_layer(self) -> None:
+        self.model_runner.update_current_attn_layer()
 
 
 class WorkerWrapperBase:

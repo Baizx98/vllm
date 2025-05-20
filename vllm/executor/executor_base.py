@@ -119,6 +119,10 @@ class ExecutorBase(ABC):
     def __del__(self):
         self.shutdown()
 
+    def update_current_attn_layer(self) -> None:
+        """Update the current attention layer for the executor."""
+        return
+
 
 class ExecutorAsyncBase(ExecutorBase):
 

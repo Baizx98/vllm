@@ -482,8 +482,9 @@ class LLMEngine:
         The workers will determine the number of blocks in both the GPU cache
         and the swap CPU cache.
         """
-        num_gpu_blocks, num_cpu_blocks = (
-            self.model_executor.determine_num_available_blocks())
+        # num_gpu_blocks, num_cpu_blocks = (
+        #     self.model_executor.determine_num_available_blocks())
+        num_gpu_blocks, num_cpu_blocks = 1000, 200
 
         if self.cache_config.num_gpu_blocks_override is not None:
             num_gpu_blocks_override = self.cache_config.num_gpu_blocks_override
@@ -1334,6 +1335,7 @@ class LLMEngine:
     def layer_step(self, execute_model_req: ExecuteModelRequest,
                    layer_id: int):
         # 负责层的换入换出
+        self.model_executor.update_current_attn_layer()
         execute_model_req.next_block_table(layer_id)
         output = self.model_executor.execute_model(
             execute_model_req=execute_model_req)
@@ -1467,7 +1469,7 @@ class LLMEngine:
 
             # Fake variable for the number of layers in the model
             if self.cache_config.enable_layer_wise_block:
-                attn_num_layers = 20
+                attn_num_layers = 16
                 for layer in range(attn_num_layers):
                     outputs = self.layer_step(execute_model_req, layer)
             else:

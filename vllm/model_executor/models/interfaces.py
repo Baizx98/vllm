@@ -369,6 +369,9 @@ class SupportsLayerStep(Protocol):
     def num_attn_layers(self) -> int:
         ...
 
+    def update_current_attn_layer(self) -> None:
+        ...
+
 
 @runtime_checkable
 class _SupportsLayerStepType(Protocol):
@@ -385,6 +388,9 @@ class _SupportsLayerStepType(Protocol):
 
     @property
     def num_attn_layers(self) -> int:
+        ...
+
+    def update_current_attn_layer(self, instance) -> None:
         ...
 
 

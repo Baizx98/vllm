@@ -286,10 +286,10 @@ class LlamaModel(nn.Module):
         self.num_attn_layers = (
             vllm_config.model_config.get_num_attention_layers(
                 vllm_config.parallel_config))
-        self.cuurent_attn_layer = 0
+        self.current_attn_layer = -1
         self.is_rank_end = False
-        self.intermediate_tensors = make_empty_intermediate_tensors_factory(
-            ["hidden_states", "residual"], config.hidden_size)
+        # FIXME 这里返回的是一个函数，而不是intermediate tensors类
+        self.intermediate_tensors = IntermediateTensors(tensors={})
 
         self.config = config
         self.padding_idx = config.pad_token_id
@@ -328,9 +328,10 @@ class LlamaModel(nn.Module):
         return self.embed_tokens(input_ids)
 
     def update_current_attn_layer(self) -> None:
-        self.cuurent_attn_layer += 1
-        if self.cuurent_attn_layer == (self.num_attn_layers - 1):
-            self.cuurent_attn_layer = 0
+        self.current_attn_layer += 1
+        # FIXME
+        if self.current_attn_layer == self.num_attn_layers:
+            self.current_attn_layer = 0
 
     def orginal_forward(
         self,
@@ -376,6 +377,9 @@ class LlamaModel(nn.Module):
         intermediate_tensors: Optional[IntermediateTensors],
         inputs_embeds: Optional[torch.Tensor] = None,
     ) -> Union[torch.Tensor, IntermediateTensors]:
+        # FIXME
+        if self.current_attn_layer == 0:
+            self.intermediate_tensors = IntermediateTensors(tensors={})
 
         # There are nine cases:
         # 1. First rank and first layer: 在这之前处理input_embeds，
@@ -398,7 +402,7 @@ class LlamaModel(nn.Module):
         # 执行完当前层后,处理norm，返回hidden_states，清空类变量，重置状态
         # NOTE 这里需要返回rank end状态吗？我觉得不需要
 
-        current_layer_idx = self.cuurent_attn_layer
+        current_layer_idx = self.current_attn_layer
         layer_idx = self.start_layer + current_layer_idx
         layer = self.layers[layer_idx]
 
@@ -423,12 +427,10 @@ class LlamaModel(nn.Module):
         hidden_states, residual = layer(positions, hidden_states,
                                         kv_caches[current_layer_idx],
                                         attn_metadata, residual)
-        # 更新类变量，不影响下面的函数内部变量的值
-        self.update_current_attn_layer()
 
         # 末层逻辑
         if current_layer_idx == (self.num_attn_layers - 1):
-            self.cuurent_attn_layer = 0
+            # self.current_attn_layer = 0 # no mean
             self.intermediate_tensors = None
             if get_pp_group().is_last_rank:
                 hidden_states, _ = self.norm(hidden_states, residual)
@@ -741,20 +743,24 @@ class LlamaForCausalLM(nn.Module, SupportsLoRA, SupportsPP, SupportsLayerStep):
 
     @property
     def is_first_attn_layer(self) -> bool:
-        return self.model.cuurent_attn_layer == 0
+        return (self.model.current_attn_layer == 0
+                or self.model.current_attn_layer == -1)
 
     @property
     def is_last_attn_layer(self) -> bool:
-        return self.model.cuurent_attn_layer == (self.model.num_attn_layers -
+        return self.model.current_attn_layer == (self.model.num_attn_layers -
                                                  1)
 
     @property
     def current_attn_layer(self) -> int:
-        return self.model.cuurent_attn_layer
+        return self.model.current_attn_layer
 
     @property
     def num_attn_layers(self) -> int:
         return self.model.num_attn_layers
+
+    def update_current_attn_layer(self):
+        return self.model.update_current_attn_layer()
 
 
 class LlamaEmbeddingModel(nn.Module, SupportsLoRA, SupportsPP):

@@ -1340,6 +1340,7 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
         model_input = self.prepare_model_input(
             seqs, finished_requests_ids=finished_requests_ids)
         intermediate_tensors = None
+        # 如果不是第一个rank且是第一个层
         if not get_pp_group().is_first_rank:
             intermediate_tensors = self.model.make_empty_intermediate_tensors(
                 batch_size=batch_size,
@@ -1426,11 +1427,14 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
 
     @property
     def is_first_attn_layer(self) -> Optional[bool]:
-        return self.model.is_first_layer
+        return self.model.is_first_attn_layer
 
     @property
     def is_last_attn_layer(self) -> Optional[bool]:
-        return self.model.is_last_layer
+        return self.model.is_last_attn_layer
+
+    def update_current_attn_layer(self) -> None:
+        self.model.update_current_attn_layer()
 
     @torch.inference_mode()
     def capture_model(self, kv_caches: List[List[torch.Tensor]]) -> None:
@@ -1641,6 +1645,7 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
             seq_group_metadata_list, finished_requests_ids)
         # last rank and last layer if enable_layer_wise_block
         # if get_pp_group().is_last_rank:
+        # FIXME
         if get_pp_group().is_last_rank and (not self.enable_layer_wise_block or
                                             (self.enable_layer_wise_block
                                              and self.is_last_attn_layer)):
@@ -1745,9 +1750,14 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
 
         # 这里隐含了两个条件：
         # Compute the logits in the last pipeline stage.
-        if not get_pp_group().is_last_rank and (
-                not self.enable_layer_wise_block
-                or not self.is_last_attn_layer):
+        # if not get_pp_group().is_last_rank and (
+        #         not self.enable_layer_wise_block
+        #         or not self.is_last_attn_layer):
+        if (not self.enable_layer_wise_block
+                and not get_pp_group().is_last_rank) or (
+                    self.enable_layer_wise_block
+                    and not (get_pp_group().is_last_rank
+                             and self.is_last_attn_layer)):
             if (self.is_driver_worker
                     and hidden_or_intermediate_states is not None
                     and isinstance(hidden_or_intermediate_states,

@@ -174,6 +174,9 @@ class GPUExecutor(ExecutorBase):
     def stop_profile(self) -> None:
         self.driver_worker.stop_profile()
 
+    def update_current_attn_layer(self) -> None:
+        self.driver_worker.update_current_attn_layer()
+
 
 class GPUExecutorAsync(GPUExecutor, ExecutorAsyncBase):
 
