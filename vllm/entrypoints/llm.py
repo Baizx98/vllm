@@ -409,6 +409,8 @@ class LLM:
             priority=priority)
 
         outputs = self._run_engine(use_tqdm=use_tqdm)
+        # kill transfer thread
+        self.llm_engine.shutdown()
         return self.engine_class.validate_outputs(outputs, RequestOutput)
 
     def beam_search(

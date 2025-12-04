@@ -1,13 +1,19 @@
 """CacheEngine class for managing the KV cache."""
-from typing import List, Union
+from typing import List, Union, Callable, Tuple
+from queue import Queue
 
 import torch
 
 from vllm.attention import get_attn_backend
 from vllm.config import CacheConfig, DeviceConfig, ModelConfig, ParallelConfig
 from vllm.logger import init_logger
-from vllm.utils import (STR_DTYPE_TO_TORCH_DTYPE, FakeList, get_dtype_size,
-                        is_pin_memory_available)
+from vllm.utils import (
+    STR_DTYPE_TO_TORCH_DTYPE,
+    FakeList,
+    Device,
+    get_dtype_size,
+    is_pin_memory_available,
+)
 
 logger = init_logger(__name__)
 
@@ -57,11 +63,24 @@ class CacheEngine:
                                              cache_config.cache_dtype,
                                              self.block_size,
                                              model_config.is_attention_free)
+        
+        assert self.num_gpu_blocks is not None
+        assert self.num_cpu_blocks is not None
 
         # Initialize the cache.
         self.gpu_cache = self._allocate_kv_cache(
             self.num_gpu_blocks, self.device_config.device_type)
         self.cpu_cache = self._allocate_kv_cache(self.num_cpu_blocks, "cpu")
+
+        # Transfer
+        self.offload_data_stream = torch.cuda.Stream()
+        self.offload_monitor_queue: Queue[Tuple[torch.cuda.Event, Callable]] = (
+            Queue()
+        )
+        self.prefetch_data_stream = torch.cuda.Stream()
+        self.prefetch_monitor_queue: Queue[
+            Tuple[torch.cuda.Event, Callable]
+        ] = Queue()
 
     def _allocate_kv_cache(
         self,
@@ -94,7 +113,7 @@ class CacheEngine:
 
     def swap_in(self, src_to_dst: torch.Tensor) -> None:
         if self.cache_config.enable_layer_wise_block:
-            self.attn_backend.swap_blocks(self.cpu_cache, self.gpu_cache,
+            self.attn_backend.swap_blocks(self.cpu_cache, self.gpu_cache, # type: ignore
                                           src_to_dst)  # type: ignore
             return
         for i in range(self.num_attention_layers):
@@ -103,7 +122,7 @@ class CacheEngine:
 
     def swap_out(self, src_to_dst: torch.Tensor) -> None:
         if self.cache_config.enable_layer_wise_block:
-            self.attn_backend.swap_blocks(self.gpu_cache, self.cpu_cache,
+            self.attn_backend.swap_blocks(self.gpu_cache, self.cpu_cache, # type: ignore
                                           src_to_dst)  # type: ignore
             return
         for i in range(self.num_attention_layers):
@@ -138,3 +157,35 @@ class CacheEngine:
             dtype = STR_DTYPE_TO_TORCH_DTYPE[cache_config.cache_dtype]
         dtype_size = get_dtype_size(dtype)
         return dtype_size * total
+    
+    def transfer_blocks_async(
+        self,
+        blocks_to_transfer: torch.Tensor,
+        src_device: Device,
+        dst_device: Device,
+        transfer_stream: torch.cuda.Stream,
+        callback_fn: Callable,
+        add_event: Callable,
+    ):
+        """Transfer blocks asynchronously between devices."""
+        # TODO: 现在是临时过渡版本，后续根据src和dst设备添加更优雅的处理逻辑
+        src_block_ids = blocks_to_transfer[:, 0]
+        dst_block_ids = blocks_to_transfer[:, 1]
+
+        src_cache = (
+            self.gpu_cache if src_device == Device.GPU else self.cpu_cache
+        )
+        dst_cache = (
+            self.cpu_cache if dst_device == Device.CPU else self.gpu_cache
+        )
+
+        # index maybe wrong
+        with torch.cuda.stream(stream=transfer_stream):  # type: ignore
+            tmp_tensor = src_cache[0][:, src_block_ids, :].contiguous()
+            dst_cache[0][:, dst_block_ids, :].copy_(
+                tmp_tensor, non_blocking=True
+            )
+            event: torch.cuda.Event = torch.cuda.Event(blocking=False)  # type: ignore
+            event.record(transfer_stream)
+            if callback_fn is not None:
+                add_event(event, callback_fn)

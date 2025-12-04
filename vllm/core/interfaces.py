@@ -6,6 +6,7 @@ from typing import Tuple
 
 from vllm.sequence import Sequence, SequenceGroup
 from vllm.utils import Device
+from vllm.core.block.interfaces import Block
 
 
 class AllocStatus(enum.Enum):
@@ -43,6 +44,10 @@ class BlockSpaceManager(ABC):
             return LayerBlockSpaceManager
 
         raise ValueError(f"Unknown version {version=}")
+    
+    @abstractmethod
+    def can_allocate_blocks(self, device: Device,num_blocks: int) -> bool:
+        pass
 
     @abstractmethod
     def can_allocate(self,
@@ -125,4 +130,79 @@ class BlockSpaceManager(ABC):
     @abstractmethod
     def get_prefix_cache_hit_rate(self, device: Device) -> float:
         """Prefix cache hit rate. -1 means not supported or disabled."""
+        pass
+
+    @abstractmethod
+    def can_allocate_block_ids(self, device: Device, num_blocks: int) ->bool:
+        pass
+
+    @abstractmethod
+    def allocate_block_id(self, device: Device) -> int:
+        pass
+
+    @abstractmethod
+    def free_block_id(self, device: Device, block_id: int) -> None:
+        pass
+
+    @abstractmethod
+    def get_device_and_pid(self, block_id: int) -> Tuple[Device, int]:
+        pass
+
+    @abstractmethod
+    def get_gid(self, device: Device, pid: int) -> int:
+        pass
+
+    @abstractmethod
+    def is_device_block(self, block_id:int,device:Device) -> bool:
+        pass
+
+    @abstractmethod
+    def get_layer_blocks_by_importance(self, layer:int)-> List[Block]:
+        pass
+
+    @abstractmethod
+    def predict_next_layer_needed_blocks(self, layer: int) -> List[Block]:
+        pass
+
+    @abstractmethod
+    def get_transfer_plan(
+        self, blocks: List[Block], src_device: Device, dst_device: Device
+    ) -> List[Tuple[int, int]]:
+        pass
+
+    @abstractmethod
+    def update_blocks_after_transfer(
+        self,
+        plan: List[Tuple[int, int]],
+        original_blocks: List[Block],
+        src_device: Device,
+        dst_device: Device,
+    ) -> None:
+        pass
+
+    @abstractmethod
+    def kv_cache_ready(self, batch: List[Sequence], layer: int) -> bool:
+        pass
+
+    @abstractmethod
+    def wait_for_kv_cache_ready(self, batch: List[Sequence], layer: int) -> None:
+        pass
+
+    @property
+    @abstractmethod
+    def watermark(self) -> float:
+        pass
+
+    @abstractmethod
+    def free_block_num(self, device: Device) -> int:
+        pass
+
+    @property
+    @abstractmethod
+    def num_gpu_blocks(self) -> int:
+        pass
+
+    @property
+    @abstractmethod
+    def num_attn_layers(self) -> int:
         pass

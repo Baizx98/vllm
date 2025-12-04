@@ -3,6 +3,7 @@
 from typing import Dict, List, Optional
 from typing import Sequence as GenericSequence
 from typing import Tuple
+import threading
 
 from vllm.core.block.block_table import BlockTable
 from vllm.core.block.cpu_gpu_block_allocator import CpuGpuBlockAllocator
@@ -12,7 +13,8 @@ from vllm.core.block.prefix_caching_block import (ComputedBlocksTracker,
 from vllm.core.block.utils import check_no_caching_or_swa_for_blockmgr_encdec
 from vllm.core.interfaces import AllocStatus, BlockSpaceManager
 from vllm.sequence import Sequence, SequenceGroup, SequenceStatus
-from vllm.utils import Device
+from vllm.utils import Device, ThreadSafeDict, BlockState
+from vllm.core.block.common import locked
 
 SeqId = int
 EncoderSeqId = str
@@ -43,10 +45,11 @@ class LayerBlockSpaceManager(BlockSpaceManager):
         **kwargs,
     ) -> None:
         self.block_size = block_size
-        self.num_gpu_blocks = num_gpu_blocks
-        self.num_cpu_blocks = num_cpu_blocks
+        self._num_gpu_blocks = num_gpu_blocks
+        self._num_cpu_blocks = num_cpu_blocks
+        print(f"gpu blocks:{num_gpu_blocks}, cpu blocks:{num_cpu_blocks}")
         if "num_attn_layers" in kwargs:
-            self.num_attn_layers = kwargs["num_attn_layers"]
+            self._num_attn_layers = kwargs["num_attn_layers"]
         else:
             raise ValueError("num_attn_layers is required.")
 
@@ -58,7 +61,7 @@ class LayerBlockSpaceManager(BlockSpaceManager):
         self.enable_caching = enable_caching
         assert not self.enable_caching
 
-        self.watermark = watermark
+        self._watermark = watermark
         assert 0.0 <= self.watermark <= 1.0
 
         self.watermark_blocks = int(watermark * num_gpu_blocks)
@@ -74,6 +77,10 @@ class LayerBlockSpaceManager(BlockSpaceManager):
         self.layer_block_tables: List[Dict[SeqId, BlockTable]] = [
             {} for _ in range(self.num_attn_layers)
         ]
+
+        # TODO need a dict of {id:set}
+        self.gid_to_seq: ThreadSafeDict = ThreadSafeDict()
+        self._lock = threading.Lock()
         # self.layer_cross_block_tables: List[Dict[EncoderSeqId, BlockTable]] =
         # [
         #     {} for _ in range(num_attn_layers)
@@ -87,10 +94,19 @@ class LayerBlockSpaceManager(BlockSpaceManager):
             self.block_allocator)
         self._last_access_blocks_tracker = LastAccessBlocksTracker(
             self.block_allocator)
+        
+        self._lock = threading.Lock()
 
     def block_tables(self, layer: int) -> Dict[SeqId, BlockTable]:
         return self.layer_block_tables[layer]
+    
+    def can_allocate_blocks(self, device: Device, num_blocks: int) -> bool:
+        """Check if the specified number of blocks can be allocated on the
+        device.
+        """
+        return self.block_allocator.can_allocate_blocks(device, num_blocks)
 
+    @locked("_lock")
     def can_allocate(self,
                      seq_group: SequenceGroup,
                      num_lookahead_slots: int = 0) -> AllocStatus:
@@ -143,6 +159,7 @@ class LayerBlockSpaceManager(BlockSpaceManager):
             block_table_list.append(block_table)
         return block_table_list
 
+    @locked("_lock")
     def allocate(self, seq_group: SequenceGroup) -> None:
         # NOTE: only called by prefill phase to allocate blocks
         #  for all layers of the seq_group
@@ -187,6 +204,7 @@ class LayerBlockSpaceManager(BlockSpaceManager):
                 ))
         return num_touched_blocks
 
+    @locked("_lock")
     def can_append_slots(self, seq_group: SequenceGroup,
                          num_lookahead_slots: int) -> bool:
         """Determine if slots can be allocated for all layers of a seq_group.
@@ -199,11 +217,12 @@ class LayerBlockSpaceManager(BlockSpaceManager):
             Device.GPU)
         return num_touched_blocks <= num_free_gpu_blocks
 
+    @locked("_lock")
     def can_append_slots_batch(self, seq_groups: List[SequenceGroup],
                                num_lookahead_slots: int,
                                num_laysers: int) -> bool:
         # 检查是否可以为running队列中的所有seq_group的所有层分配slots
-        # TODO 添加参数，来判断是否所有层还是单个层还是部分层
+
         # TODO 该函数是否需要转移到scheduler中？
         assert num_laysers <= self.num_attn_layers and num_laysers > 0, \
             "num_layers should be in [1,num_attn_layers]"
@@ -216,6 +235,7 @@ class LayerBlockSpaceManager(BlockSpaceManager):
             Device.GPU)
         return num_touched_blocks <= num_free_gpu_blocks
 
+    @locked("_lock")
     def append_slots(
         self,
         seq: Sequence,
@@ -230,7 +250,7 @@ class LayerBlockSpaceManager(BlockSpaceManager):
             for layer in range(self.num_attn_layers)
         ]
         for block_table in block_table_list:
-            block_table.append_token_ids(
+              block_table.append_token_ids(
                 token_ids=block_table.get_unseen_token_ids(
                     seq.get_token_ids()),
                 num_lookahead_slots=num_lookahead_slots,
@@ -241,6 +261,7 @@ class LayerBlockSpaceManager(BlockSpaceManager):
         new_cows = self.block_allocator.clear_copy_on_writes()
         return new_cows
 
+    @locked("_lock")
     def free(self, seq: Sequence) -> None:
         seq_id = seq.seq_id
 
@@ -269,8 +290,8 @@ class LayerBlockSpaceManager(BlockSpaceManager):
         pass
         return
 
-    def get_block_table(self, seq: Sequence):
-        return None
+    def get_block_table(self, seq: Sequence) -> List[int]:
+        return []
 
     def get_layer_block_table(self, seq: Sequence) -> List[BlockTable]:
         layer_block_table = []
@@ -286,7 +307,7 @@ class LayerBlockSpaceManager(BlockSpaceManager):
         # TODO
         return []
 
-    def access_all_blocks_in_seq(self, seq: Sequence, now: float):
+    def access_all_blocks_in_seq(self, seq: Sequence, access_time: float):
         """Same as access_all_blocks_in_seq in SelfAttnBlockSpaceManager."""
         # TODO
         pass
@@ -304,6 +325,7 @@ class LayerBlockSpaceManager(BlockSpaceManager):
         # TODO
         return []
 
+    @locked("_lock")
     def fork(self, parent_seq: Sequence, child_seq: Sequence) -> None:
         if parent_seq.seq_id not in self.block_tables(0):
             return
@@ -335,6 +357,7 @@ class LayerBlockSpaceManager(BlockSpaceManager):
         return self._can_swap(seq_group, Device.GPU, SequenceStatus.SWAPPED,
                               num_lookahead_slots)
 
+    @locked("_lock")
     def swap_in(self, seq_group: SequenceGroup) -> List[Tuple[int, int]]:
         """Returns the block id mapping (from CPU to GPU) generated by
         swapping in the given seq_group with num_lookahead_slots for all
@@ -393,6 +416,7 @@ class LayerBlockSpaceManager(BlockSpaceManager):
                                       SequenceStatus.RUNNING)
         return alloc_status == AllocStatus.OK
 
+    @locked("_lock")
     def swap_out(self, seq_group: SequenceGroup) -> List[Tuple[int, int]]:
         """Returns the block id mapping (from GPU to CPU) generated by
         swapping out the given sequence_group(all attn layers) with
@@ -443,6 +467,7 @@ class LayerBlockSpaceManager(BlockSpaceManager):
     def get_prefix_cache_hit_rate(self, device: Device) -> float:
         return self.block_allocator.get_prefix_cache_hit_rate(device)
 
+    @locked("_lock")
     def _can_swap(self,
                   seq_group: SequenceGroup,
                   device: Device,
@@ -497,3 +522,175 @@ class LayerBlockSpaceManager(BlockSpaceManager):
             return AllocStatus.OK
         else:
             return AllocStatus.NEVER
+        
+    @locked("_lock")
+    def can_allocate_block_ids(self, device: Device, num_blocks: int) -> bool:
+        """Check if the specified number of blocks can be allocated on the
+        device.
+        """
+        return self.block_allocator.can_allocate_block_ids(device, num_blocks)
+
+    def allocate_block_id(self, device: Device) -> int:
+        """Allocate a single block on the specified device and return its
+        block ID.
+        """
+        return self.block_allocator.allocate_block_id(device)
+
+    def free_block_id(self, device: Device, block_id: int) -> None:
+        """Free the specified block ID on the given device."""
+        self.block_allocator.free_block_id(device, block_id)
+
+    def get_device_and_pid(self, block_id: Optional[int]) -> Tuple[Device, int]:
+        """Get the device and physical block ID for the given block ID."""
+        return self.block_allocator.get_device_and_pid(block_id)
+
+    def get_gid(self, device: Device, pid: int) -> int:
+        """Get global block ID for the given device and physical block ID."""
+        return self.block_allocator.get_gid(device, pid)
+    
+    def is_device_block(self, block_id: Optional[int], device: Device) -> bool:
+        """
+        判断给定的块ID是否属于指定设备。
+
+        :param block_id: 块的全局ID
+        :param device: 设备类型（Device.GPU 或 Device.CPU）
+        :return: 如果属于指定设备则返回True，否则返回False
+        """
+        block_device, _ = self.get_device_and_pid(block_id)
+        return block_device == device
+
+    @locked("_lock")
+    def get_layer_blocks_by_importance(self, layer: int) -> List[Block]:
+        if layer >= self.num_attn_layers:
+            return []
+        all_blocks: List[Block] = []
+        for table in self.layer_block_tables[layer].values():
+            all_blocks.extend(table.blocks)
+        all_blocks = [
+            block
+            for block in all_blocks
+            if self.is_device_block(block.block_id, Device.GPU)
+            and block.state != BlockState.TRANSFERRING
+        ]
+        return sorted(
+            all_blocks,
+            key=lambda block: block.block_id
+            if block.block_id is not None
+            else -1,
+            reverse=True,
+        )
+    
+    @locked("_lock")
+    def predict_next_layer_needed_blocks(self, layer: int) -> List[Block]:
+        # 应该从CPU块中挑选
+        if layer >= self.num_attn_layers:
+            return []
+        all_blocks: List[Block] = []
+        for table in self.layer_block_tables[layer].values():
+            all_blocks.extend(table.blocks)
+        all_blocks = [
+            block
+            for block in all_blocks
+            if self.is_device_block(block.block_id, Device.CPU)
+            and block.state != BlockState.TRANSFERRING
+        ]
+        return sorted(
+            all_blocks,
+            key=lambda block: block.block_id
+            if block.block_id is not None
+            else -1,
+            reverse=True,
+        )
+
+    def get_transfer_plan(
+        self, blocks: List[Block], src_device: Device, dst_device: Device
+    ) -> List[Tuple[int, int]]:
+        """
+        1. 将源块标记为 TRANSFERRING 状态
+        2. 分配目标块并将其标记为 TRANSFERRING 状态
+        3. 返回块的物理 ID 映射
+        """
+        # with self._lock:  # 保证多线程安全
+        physical_block_id_mapping: List[Tuple[int, int]] = []
+        block_num = len(blocks)
+        # 检查目标设备是否有足够的空闲块
+        if not self.can_allocate_blocks(dst_device, block_num):
+            raise RuntimeError(
+                f"Not enough for transfer from {src_device} to {dst_device}"
+            )
+        for block in blocks:
+            src_block_id = block.block_id
+            _, src_pid = self.get_device_and_pid(src_block_id)
+            block.transferring()  # 源块标记为传输中
+            # 分配目标块
+            dst_block_id = self.allocate_block_id(dst_device)
+            _, dst_pid = self.get_device_and_pid(dst_block_id)
+            # 记录物理 ID 映射
+            physical_block_id_mapping.append((src_pid, dst_pid))
+        return physical_block_id_mapping
+
+    # @locked("_lock")
+    def update_blocks_after_transfer(
+        self,
+        plan: List[Tuple[int, int]],
+        original_blocks: List[Block],
+        src_device: Device,
+        dst_device: Device,
+    ) -> None:
+        """
+        根据传输计划更新块的设备信息和映射。
+
+        :param plan: [(src_pid, dst_pid), ...]
+        :param original_blocks: 原始 Block 列表(会被更新 block_id)
+        :param src_device: 源设备 (torch.device("cuda") 或 torch.device("cpu"))
+        :param dst_device: 目标设备
+        """
+        # 这里加了大锁，但实际上可以使用单独的加锁的函数来处理
+        # FIXME TODO 传输完成后要更新block id和allocator和其它所有block的类变量
+        # 中所有需要更新的变量
+        with self._lock:
+            for i, (src_pid, dst_pid) in enumerate(plan):  
+                src_gid = self.get_gid(src_device, src_pid)
+                dst_gid = self.get_gid(dst_device, dst_pid)
+
+                # 更新 block 的全局 id
+                original_blocks[i].block_id = dst_gid
+                original_blocks[i].allocator = self.block_allocator.allocators[
+                    dst_device
+                ]
+                # 其实只有allocator需要更新，只有allocator是设备相关的
+                # TODO 更新block的 _allocator为目标设备的块分配器
+
+                # self.gid_to_seq.update(old_gid=src_gid, new_gid=dst_gid)
+
+                # 释放源设备的块 ID
+                self.free_block_id(src_device, src_gid)
+                original_blocks[i].ready()  # 传输完成，标记为 READY
+
+    def kv_cache_ready(self, batch: List[Sequence], layer: int) -> bool:
+        # TODO 这里要阻塞的呀 这里判断是否所有序列的kv cache都ready的逻辑有问题
+        for seq in batch:
+            if seq.seq_id not in self.layer_block_tables[layer]:
+                return False
+        return True
+
+    def wait_for_kv_cache_ready(
+        self, batch: List[Sequence], layer: int
+    ) -> None:
+        while not self.kv_cache_ready(batch, layer):
+            print("kv not ready阻塞……")
+
+    @property
+    def watermark(self) -> float:
+        return self._watermark
+    
+    def free_block_num(self,device:Device) -> int:
+        return self.block_allocator.get_num_free_blocks(device)
+    
+    @property
+    def num_gpu_blocks(self) -> int:
+        return self._num_gpu_blocks
+    
+    @property
+    def num_attn_layers(self) -> int:
+        return self._num_attn_layers

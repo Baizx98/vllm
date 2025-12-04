@@ -3,12 +3,18 @@ from typing import Deque, FrozenSet, Iterable, List, Optional, Tuple
 
 from vllm.core.block.common import (BlockPool, CopyOnWriteTracker, RefCounter,
                                     get_all_blocks_recursively)
-from vllm.core.block.interfaces import Block, BlockAllocator, BlockId, Device
+from vllm.core.block.interfaces import (
+    Block,
+    BlockAllocator,
+    BlockId,
+    Device,
+    BlockState,
+)
 
 Refcount = int
 
 
-class NaiveBlockAllocator(BlockAllocator):
+class   NaiveBlockAllocator(BlockAllocator):
     """A simple block allocator that manages blocks of memory without prefix
     caching.
 
@@ -124,6 +130,15 @@ class NaiveBlockAllocator(BlockAllocator):
                                             block_size=self._block_size,
                                             physical_block_id=block_id)
         return block
+    
+    def can_allocate_blocks(self, num_blocks:int)->bool:
+        return num_blocks <= len(self._free_block_indices)
+    
+    def can_allocate_block_ids(self, num_block_ids: int) -> bool:
+        return num_block_ids <= len(self._all_block_indices)
+
+    def allocate_block_id(self) ->BlockId:
+        return self._allocate_block_id()
 
     def _allocate_block_id(self) -> BlockId:
         if not self._free_block_indices:
@@ -142,6 +157,17 @@ class NaiveBlockAllocator(BlockAllocator):
             self._free_block_indices.appendleft(block_id)
 
         block.block_id = None
+
+    def free_block_id(self, block_id: BlockId) -> None:
+        """Frees the given block ID.
+        Only use this method when using layer-wise block.
+
+        Args:
+            block_id (BlockId): The block ID to be freed.
+        """
+        refcount = self._refcounter.decr(block_id)
+        if refcount == 0:
+            self._free_block_indices.appendleft(block_id)
 
     def free(self, block: Block, keep_block_object: bool = False) -> None:
         # Release the physical block id
@@ -364,9 +390,23 @@ class NaiveBlock(Block):
         self._prev_block = prev_block
         self._block_id = block_id
         self._allocator = allocator
+        self._block_state = BlockState.READY
         self._cow_target = _cow_target if _cow_target is not None else self
 
         self._append_token_ids_no_cow(token_ids)
+    
+        
+    @property
+    def state(self)-> BlockState:
+        return self._block_state
+
+    def ready(self) -> None:
+        """Marks the block as ready for use."""
+        self._block_state = BlockState.READY
+
+    def transferring(self) -> None:
+        """Marks the block as being transferred."""
+        self._block_state = BlockState.TRANSFERRING
 
     def append_token_ids(self, token_ids: List[int]) -> None:
         """Appends the given token IDs to the block and performs a 
@@ -447,3 +487,11 @@ class NaiveBlock(Block):
     @property
     def content_hash(self) -> Optional[int]:
         return None
+
+    @property
+    def allocator(self) -> BlockAllocator:
+        return self._allocator
+    
+    @allocator.setter
+    def allocator(self, allocator: BlockAllocator) -> None:
+        self._allocator = allocator

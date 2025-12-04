@@ -5,7 +5,7 @@ from vllm.core.block.interfaces import (Block, BlockAllocator, BlockId,
 from vllm.core.block.naive_block import NaiveBlock, NaiveBlockAllocator
 from vllm.core.block.prefix_caching_block import PrefixCachingBlockAllocator
 from vllm.platforms import current_platform
-from vllm.utils import Device
+from vllm.utils import Device,BlockState
 
 
 class CpuGpuBlockAllocator(DeviceAwareBlockAllocator):
@@ -107,14 +107,66 @@ class CpuGpuBlockAllocator(DeviceAwareBlockAllocator):
             Device.GPU: gpu_block_allocator,
         }
 
+        self.num_gpu_blocks = self._allocators[
+            Device.GPU
+        ].get_num_total_blocks()
+        self.num_cpu_blocks = self._allocators[
+            Device.CPU
+        ].get_num_total_blocks()
+
         self._swap_mapping: Dict[int, int] = {}
         self._null_block: Optional[Block] = None
 
+        # FIXME 反查表，需要完善。 需要完善啥呀，我有点忘记了giao！！！
         self._block_ids_to_allocator: Dict[int, BlockAllocator] = {}
         for _, allocator in self._allocators.items():
             for block_id in allocator.all_block_ids:
                 self._block_ids_to_allocator[block_id] = allocator
+    
+    def can_allocate_blocks(self, device: Device,num_blocks: int) -> bool:
+        """Check if the specified number of blocks can be allocated on the
+        device.
+        """
+        return self._allocators[device].can_allocate_blocks(num_blocks)
+    
+    def can_allocate_block_ids(self, device: Device, num_blocks: int) -> bool:
+        """Check if the specified number of block IDs can be allocated on the
+        device.
+        """
+        return self._allocators[device].can_allocate_block_ids(num_blocks)
+    
+    def allocate_block_id(self, device: Device) -> int:
+        """Allocate a new block ID on the specified device.
 
+        Args:
+            device (Device): The device on which to allocate the new block ID.
+
+        Returns:
+            int: The newly allocated block ID.
+        """
+        block_id = self._allocators[device].allocate_block_id()
+        return block_id
+    
+    def free_block_id(self, device: Device, block_id: BlockId) -> None:
+        self._allocators[device].free_block_id(block_id)
+        return None
+    
+    def get_device_and_pid(self, block_id: Optional[int]) -> Tuple[Device, int]:
+        assert block_id is not None
+        assert 0 <= block_id < self.num_gpu_blocks + self.num_cpu_blocks
+        if block_id < self.num_gpu_blocks:
+            return (Device.GPU, block_id)
+        else:
+            return (Device.CPU, block_id - self.num_gpu_blocks)
+
+    def get_gid(self, device: Device, pid: BlockId) -> int:
+        gid = -1
+        if device == Device.GPU:
+            gid = pid
+        elif device == Device.CPU:
+            gid = pid + self.num_gpu_blocks
+        return gid
+    
     def allocate_or_get_null_block(self) -> Block:
         if self._null_block is None:
             self._null_block = NullBlock(
@@ -341,6 +393,10 @@ class CpuGpuBlockAllocator(DeviceAwareBlockAllocator):
         mapping = self._swap_mapping.copy()
         self._swap_mapping.clear()
         return list(mapping.items())
+    
+    @property
+    def allocators(self) -> Dict[Device, BlockAllocator]:
+        return self._allocators
 
 
 class NullBlock(Block):
@@ -407,3 +463,27 @@ class NullBlock(Block):
     @property
     def content_hash(self):
         return self._proxy.content_hash
+    
+        
+    @property
+    def state(self) -> BlockState:
+        """Should be only used by LayerBlockSpaceManager"""
+        raise NotImplementedError
+    
+    def ready(self) -> None:
+        """Should be only used by LayerBlockSpaceManager"""
+        raise NotImplementedError
+    
+    def transferring(self)->None:
+        """Should be only used by LayerBlockSpaceManager"""
+        raise NotImplementedError
+    
+    @property
+    def allocator(self) -> BlockAllocator:
+        """Should be only used by LayerBlockSpaceManager"""
+        raise NotImplementedError
+
+    @allocator.setter
+    def allocator(self, allocator: BlockAllocator) -> None:
+        """Should be only used by LayerBlockSpaceManager"""
+        raise NotImplementedError

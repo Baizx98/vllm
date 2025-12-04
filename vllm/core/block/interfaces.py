@@ -1,7 +1,9 @@
+from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Dict, FrozenSet, List, Optional, Protocol, Tuple
 
-from vllm.utils import Device
+
+from vllm.utils import Device, BlockState
 
 BlockId = int
 
@@ -57,7 +59,7 @@ class Block(ABC):
 
     @computed.setter
     @abstractmethod
-    def computed(self, value) -> bool:
+    def computed(self, value):
         """Should be only used by PrefixCacingAllocator"""
         raise NotImplementedError
 
@@ -69,6 +71,34 @@ class Block(ABC):
     @last_accessed.setter
     @abstractmethod
     def last_accessed(self, last_accessed_ts: float):
+        raise NotImplementedError
+    
+    @property
+    @abstractmethod
+    def state(self) -> BlockState:
+        """Should be only used by LayerBlockSpaceManager"""
+        raise NotImplementedError
+    
+    @abstractmethod
+    def ready(self) -> None:
+        """Should be only used by LayerBlockSpaceManager"""
+        raise NotImplementedError
+    
+    @abstractmethod
+    def transferring(self)->None:
+        """Should be only used by LayerBlockSpaceManager"""
+        raise NotImplementedError
+    
+    @property
+    @abstractmethod
+    def allocator(self) -> BlockAllocator:
+        """Should be only used by LayerBlockSpaceManager"""
+        raise NotImplementedError
+    
+    @allocator.setter
+    @abstractmethod
+    def allocator(self, allocator: BlockAllocator) -> None:
+        """Should be only used by LayerBlockSpaceManager"""
         raise NotImplementedError
 
     class Factory(Protocol):
@@ -99,6 +129,18 @@ class Block(ABC):
 class BlockAllocator(ABC):
 
     @abstractmethod
+    def can_allocate_blocks(self, num_blocks:int) -> bool:
+        pass
+
+    @abstractmethod
+    def can_allocate_block_ids(self, num_block_ids: int) -> bool:
+        pass
+
+    @abstractmethod
+    def allocate_block_id(self) -> BlockId:
+        pass
+
+    @abstractmethod
     def allocate_mutable_block(self, prev_block: Optional[Block]) -> Block:
         pass
 
@@ -111,6 +153,11 @@ class BlockAllocator(ABC):
     def allocate_immutable_blocks(
             self, prev_block: Optional[Block],
             block_token_ids: List[List[int]]) -> List[Block]:
+        pass
+
+    @abstractmethod
+    def free_block_id(self, block_id: BlockId) -> None:
+        """Only use this method when using layer-wise block."""
         pass
 
     @abstractmethod
@@ -194,6 +241,30 @@ class BlockAllocator(ABC):
 
 
 class DeviceAwareBlockAllocator(ABC):
+
+    @abstractmethod
+    def can_allocate_blocks(self, device: Device, num_blocks:int) -> bool:
+        pass
+
+    @abstractmethod
+    def can_allocate_block_ids(self, device: Device, num_blocks: int) -> bool:
+        pass
+
+    @abstractmethod
+    def allocate_block_id(self, device: Device) -> int:
+        pass
+
+    @abstractmethod
+    def free_block_id(self, device: Device, block_id: int) -> None:
+        pass
+
+    @abstractmethod
+    def get_device_and_pid(self, block_id: Optional[int]) -> Tuple[Device, int]:
+        pass
+
+    @abstractmethod
+    def get_gid(self, device: Device, pid: int) -> int:
+        pass
 
     @abstractmethod
     def allocate_mutable_block(self, prev_block: Optional[Block],
@@ -283,4 +354,9 @@ class DeviceAwareBlockAllocator(ABC):
     @abstractmethod
     def get_prefix_cache_hit_rate(self, device: Device) -> float:
         """Prefix cache hit rate. -1 means not supported or disabled."""
+        pass
+
+    @property
+    @abstractmethod
+    def allocators(self) -> Dict[Device, BlockAllocator]:
         pass

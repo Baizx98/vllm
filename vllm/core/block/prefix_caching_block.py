@@ -4,7 +4,13 @@ from typing import Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
 from vllm.core.block.common import (CacheMetricData, CopyOnWriteTracker,
                                     get_all_blocks_recursively)
-from vllm.core.block.interfaces import Block, BlockAllocator, BlockId, Device
+from vllm.core.block.interfaces import (
+    Block,
+    BlockAllocator,
+    BlockId,
+    Device,
+    BlockState,
+)
 from vllm.core.block.naive_block import (BlockPool, NaiveBlock,
                                          NaiveBlockAllocator)
 from vllm.core.evictor import EvictionPolicy, Evictor, make_evictor
@@ -209,6 +215,16 @@ class PrefixCachingBlockAllocator(BlockAllocator):
         assert not block.computed
         assert block.content_hash is None
         return block
+    
+    def can_allocate_blocks(self, num_blocks: BlockId) -> bool:
+        # TODO
+        return False
+    
+    def can_allocate_block_ids(self, num_block_ids: BlockId) -> bool:
+        return False
+
+    def allocate_block_id(self) ->BlockId:
+        return self._allocate_block_id()
 
     def _incr_refcount_cached_block(self, block: Block) -> None:
         # Set this block to be "computed" since it is pointing to a
@@ -339,6 +355,16 @@ class PrefixCachingBlockAllocator(BlockAllocator):
             self._decr_refcount_hashless_block(block)
 
         assert block.block_id is None
+
+    def free_block_id(self, block_id: BlockId) -> None:
+        """Frees the given block ID.
+        Only use this method when using layer-wise block.
+
+        Args:
+            block_id (BlockId): The block ID to be freed.
+        """
+        # TODO 尚未支持prefix cache
+        self._refcounter.decr(block_id)
 
     def free(self, block: Block, keep_block_object: bool = False) -> None:
         """Release the block (look at free_block_id(..) docs)
@@ -674,6 +700,7 @@ class PrefixCachingBlock(Block):
         self._cached_content_hash: Optional[int] = None
         self._cached_num_tokens_total: int = 0
         self._allocator = allocator
+        self._block_state = BlockState.READY
         self._last_accessed: float = _DEFAULT_LAST_ACCESSED_TIME
         self._computed = computed
 
@@ -694,6 +721,18 @@ class PrefixCachingBlock(Block):
                                      allocator=self._allocator)
 
         self._update_num_tokens_total()
+        
+    @property
+    def state(self)-> BlockState:
+        return self._block_state
+
+    def ready(self) -> None:
+        """Marks the block as ready for use."""
+        self._block_state = BlockState.READY
+
+    def transferring(self) -> None:
+        """Marks the block as being transferred."""
+        self._block_state = BlockState.TRANSFERRING
 
     def _update_num_tokens_total(self):
         """Incrementally computes the number of tokens that there is

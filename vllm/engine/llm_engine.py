@@ -18,6 +18,8 @@ from vllm.config import (DecodingConfig, LoRAConfig, ModelConfig,
                          VllmConfig)
 from vllm.core.scheduler import (ScheduledSequenceGroup, Scheduler,
                                  SchedulerOutputs)
+from vllm.core.transfer.async_offloader import AsyncOffloader
+from vllm.core.transfer.async_prefetcher import AsyncPrefetcher
 from vllm.engine.arg_utils import EngineArgs
 from vllm.engine.metrics_types import StatLoggerBase, Stats
 from vllm.engine.output_processor.interfaces import (
@@ -475,6 +477,22 @@ class LLMEngine:
             ))
 
         self.seq_id_to_seq_group: Dict[str, SequenceGroupBase] = {}
+        # NOTE they start when they are created
+        self.async_offloader = AsyncOffloader(
+            block_manager=self.scheduler[0].block_manager,
+            cache_engine=self.model_executor.driver_worker.cache_engine[0],
+            transfer_unit=16,
+        )
+        self.async_prefetcher = AsyncPrefetcher(
+            block_manager=self.scheduler[0].block_manager,
+            cache_engine=self.model_executor.driver_worker.cache_engine[0],
+            transfer_unit=16,
+        )
+
+    def shutdown(self)->None:
+        """Shutdown the engine."""
+        self.async_offloader.shutdown()
+        self.async_prefetcher.shutdown()
 
     def _initialize_kv_caches(self) -> None:
         """Initialize the KV cache in the worker(s).
@@ -1335,10 +1353,12 @@ class LLMEngine:
     def layer_step(self, execute_model_req: ExecuteModelRequest,
                    layer_id: int):
         # 负责层的换入换出
-        self.model_executor.update_current_attn_layer()
-        execute_model_req.next_block_table(layer_id)
+        self.model_executor.update_current_attn_layer() # TODO what is it
+        execute_model_req.next_block_table(layer_id) # TODO what is it
         output = self.model_executor.execute_model(
             execute_model_req=execute_model_req)
+        self.async_offloader.notify(layer_id)
+        self.async_prefetcher.notify(layer_id)
         return output
 
     def step(self) -> List[Union[RequestOutput, EmbeddingRequestOutput]]:
@@ -1469,6 +1489,8 @@ class LLMEngine:
 
             # Fake variable for the number of layers in the model
             if self.cache_config.enable_layer_wise_block:
+                # TODO get attn num layers from model config
+                # For testing purpose, we set it to 16
                 attn_num_layers = 16
                 for layer in range(attn_num_layers):
                     outputs = self.layer_step(execute_model_req, layer)

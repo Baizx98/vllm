@@ -1,6 +1,8 @@
 from collections import deque
 from dataclasses import dataclass
+from functools import wraps
 from typing import Deque, Dict, Iterable, List, Optional, Protocol, Tuple
+import threading
 
 from vllm.core.block.interfaces import Block, BlockAllocator
 
@@ -358,3 +360,23 @@ def get_all_blocks_recursively(last_block: Block) -> List[Block]:
     all_blocks: List[Block] = []
     recurse(last_block, all_blocks)
     return all_blocks
+
+def locked(lock_attr_name: str):
+    """
+    一个函数装饰器，用于在方法执行期间自动获取并释放实例上的锁。
+
+    Args:
+        lock_attr_name: 实例（self）上互斥锁（如 threading.Lock 或 asyncio.Lock）的属性名称。
+    """
+    def decorator(func):
+        print(f"{func}")
+        @wraps(func)
+        def wrapper(self, *args, **kwargs):
+            # 从实例（self）获取锁对象
+            lock = getattr(self, lock_attr_name)
+            
+            # 使用 with 语句来确保锁在函数执行完毕后（无论是否发生异常）都能被释放
+            with lock:
+                return func(self, *args, **kwargs)
+        return wrapper
+    return decorator

@@ -5,7 +5,7 @@ from vllm.core.block.common import BlockList
 from vllm.core.block.interfaces import Block, DeviceAwareBlockAllocator
 from vllm.utils import Device, cdiv, chunk_list
 
-
+ 
 class BlockTable:
     """A class to manage blocks for a specific sequence.
 
