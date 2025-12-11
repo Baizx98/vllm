@@ -1,5 +1,6 @@
 import enum
 import os
+import json
 import random
 import time
 from collections import deque
@@ -394,6 +395,10 @@ class Scheduler:
         # will be stopped during schedule() call and added to this stop list
         # for processing and deallocation by the free_finished_seq_groups()
         self._async_stopped: List[SequenceGroup] = []
+
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        self.metrics_log_path = f"/home10T/bzx/scheduler_metrics_{timestamp}.jsonl"
+        self._metrics_log_file = open(self.metrics_log_path, "w", buffering=1)
 
     @property
     def next_cache_id(self):
@@ -981,6 +986,38 @@ class Scheduler:
             num_lookahead_slots=self._get_num_lookahead_slots(
                 is_prefill=True, enable_chunking=enable_chunking))
 
+    def _collect_metrics(
+        self,
+        prefills,
+        running_scheduled,
+        swapped_in,
+        budget,
+        waiting,
+        running,
+        swapped,
+        preempted,
+    ) -> None:
+        # 例子：记录到 Prometheus / 直接写日志 / 回调
+        t = time.time()
+        record = {
+            "time": t,
+            "waiting": waiting,
+            "running": running,
+            "swapped": swapped,
+            # scheduling budget
+            "num_batched_tokens": budget.num_batched_tokens,
+            "num_curr_seqs": budget.num_curr_seqs,
+            # groups
+            "num_prefill_groups": len(prefills.seq_groups),
+            "num_decode_groups": len(running_scheduled.decode_seq_groups),
+            "num_swapped_in_groups": len(swapped_in.decode_seq_groups),
+            # preemption count
+            "num_preempted": preempted,
+        }
+        # print(record)
+        # 写入 JSON lines 文件
+        self._metrics_log_file.write(json.dumps(record) + "\n")
+
     def _schedule_default(self) -> SchedulerOutputs:
         """Schedule queued requests.
         
@@ -1071,6 +1108,17 @@ class Scheduler:
 
         ignored_seq_groups = prefills.ignored_seq_groups
         ignored_seq_groups.extend(swapped_in.infeasible_seq_groups)
+
+        self._collect_metrics(
+            prefills=prefills,
+            running_scheduled=running_scheduled,
+            swapped_in=swapped_in,
+            budget=budget,
+            waiting=len(self.waiting),
+            running=len(self.running),
+            swapped=len(self.swapped),
+            preempted=preempted,
+        )
 
         return SchedulerOutputs(
             scheduled_seq_groups=scheduled_seq_groups,
